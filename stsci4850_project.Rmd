@@ -1,0 +1,201 @@
+---
+title: "stsci4850_project"
+author: "Victoria Liu"
+date: "2025-04-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Imported three datasets from MIT Study
+```{r}
+employment_df <- read.csv("employmentdata.csv")
+fullsurvey_df <- read.csv("fullsurvey.csv")
+grades_df <- read.csv("grades.csv")
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(readr)
+library(purrr)
+```
+
+```{r}
+
+g <- read_csv("grades.csv")
+
+block_ids <- paste0(rep(1:7, each = 2), c("A", "B"))
+stubs <- c("effort", "overall", "prolific_pid.")
+
+result <- lapply(block_ids, function(bid) {
+  paste0(stubs, bid)
+})
+
+# # Create cleaned mini-dataframes
+dfs <- lapply(result, function(cols) {
+  g %>%
+    select(all_of(c(cols, "grader_id"))) %>%
+    rename_with(~ str_remove(., paste0("\\.", substr(cols[1], 7, 8))), all_of(cols)) %>%  # remove .1A, .1B, etc
+    relocate(prolific_pid, .before = everything())  # move prolific_pid to first
+})
+
+# Optionally name the list
+names(dfs) <- block_ids
+
+# 1. Combine/aggregate each mini-df
+dfs_combined <- lapply(dfs, function(df) {
+  effort_col <- names(df)[str_detect(names(df), "^effort")]
+  overall_col <- names(df)[str_detect(names(df), "^overall")]
+  grader_id_col <- names(df)[str_detect(names(df), "^grader_id")]
+  
+  df %>%
+    group_by(prolific_pid) %>%
+    summarise(
+      effort = list(.data[[effort_col]]),
+      overall = list(.data[[overall_col]]),
+      grader_id = list(.data[[grader_id_col]]),
+      .groups = "drop"
+    )
+})
+
+# 2. Then join
+joined_df <- full_join(dfs_combined[[1]], dfs_combined[[2]], by = "prolific_pid")
+
+for (df in 3:length(dfs_combined)) {
+  joined_df <- full_join(joined_df, dfs_combined[[df]], by = "prolific_pid")
+}
+
+joined_df <- reduce(dfs_combined, full_join, by = "prolific_pid")
+
+
+dfs_renamed <- imap(dfs_combined, function(df, block_name) {
+  df %>%
+    rename_with(~ paste0(., "_", block_name), -prolific_pid)
+})
+
+joined_df <- reduce(dfs_renamed, left_join, by = "prolific_pid")
+
+# Step 1: Rename columns in each mini-df based on their block name
+dfs_renamed <- imap(dfs_combined, function(df, block_name) {
+  df %>%
+    rename_with(~ paste0(., "_", block_name), -prolific_pid)
+})
+
+# Step 2: Reduce (full join) all the renamed dataframes
+joined_df <- reduce(dfs_renamed, full_join, by = "prolific_pid")
+
+# First join joined_df and employment_df
+joined_df <- full_join(joined_df, employment_df, by = "prolific_pid")
+
+# Then join the result with fullsurvey_df
+joined_df <- full_join(joined_df, fullsurvey_df, by = "prolific_pid")
+
+```
+# Changest to joined_df
+```{r}
+# Extracting relevant variables 
+block_cols <- c()
+for (i in 1:7) {
+  block_cols <- c(block_cols, paste0("effort_", i, "A"), paste0("overall_", i, "A"),
+                               paste0("effort_", i, "B"), paste0("overall_", i, "B"))
+}
+
+cleaned_df <- joined_df[c("prolific_pid", "usedgpt", "used", "usefulness", "chatgpt_often", "empstat.x", block_cols)]
+# Change all nulls to 0s
+# cleaned_df <- cleaned_df %>%
+#   mutate(across(everything(), ~ ifelse(sapply(.x, is.null), 0, .x)))
+
+cleaned_df <- cleaned_df %>%
+  mutate(across(
+    everything(),
+    ~ sapply(.x, function(x) {
+      if (is.null(x) || any(is.na(x))) {
+        0
+      } else {
+        x
+      }
+    })
+  ))
+
+# # # Average every cell in "used" column
+# cleaned_df <- cleaned_df %>%
+#   mutate(used = sapply(used, function(x) mean(x, na.rm = TRUE)))
+
+```
+
+```{r}
+library(dplyr)
+library(stringr)
+
+cleaned_df <- cleaned_df %>%
+  mutate(used = sapply(used, function(x) {
+    # If x is a single value, just return it
+    if (length(x) == 1 && !grepl(",", x)) {
+      as.numeric(x)
+    } else {
+      # Split by commas
+      nums <- as.numeric(unlist(strsplit(as.character(x), ",")))
+      mean(nums, na.rm = TRUE)
+    }
+  }))
+```
+
+```{r}
+cleaned_df <- cleaned_df %>%
+  mutate(across(
+    all_of(block_cols),
+    ~ sapply(.x, function(x) {
+        # If the entry is 0 already (like missing ones you set earlier), just keep it
+        if (identical(x, 0)) {
+          return(0)
+        }
+        # Otherwise, if it's text like "Yes"/"No"
+        if (all(x %in% c("Yes", "No", NA))) {
+          num_x <- ifelse(x == "Yes", 1, ifelse(x == "No", 0, NA))
+          return(mean(num_x, na.rm = TRUE))
+        } else {
+          # If it's already numeric (like overall scores), just take mean
+          return(mean(as.numeric(x), na.rm = TRUE))
+        }
+    })
+  ))
+```
+
+```{r}
+cleaned_df <- cleaned_df %>%
+  mutate(
+    total_effort = rowSums(select(., starts_with("effort_")), na.rm = TRUE),
+    total_overall = rowSums(select(., starts_with("overall_")), na.rm = TRUE)
+  )
+
+cleaned_df <- cleaned_df %>%
+  mutate(
+    total_effort = rowSums(select(., starts_with("effort_")), na.rm = TRUE),
+    total_overall = rowSums(select(., starts_with("overall_")), na.rm = TRUE)
+  ) %>%
+  select(-starts_with("effort_"), -starts_with("overall_"))
+```
+
+# Preparing for Linear Regression
+```{r}
+dim(cleaned_df)
+colSums(is.na(cleaned_df))
+str(cleaned_df)
+summary(cleaned_df)
+plot(cleaned_df)
+```
+
+```{r}
+model <- lm(total_overall ~ usedgpt + used + usefulness + chatgpt_often + empstat.x + total_effort, data = cleaned_df)
+summary(model)
+```
+
+```{r}
+model2 <- lm(total_overall ~ usedgpt + used + usefulness + chatgpt_often + empstat.x, data = cleaned_df)
+summary(model2)
+```
+
