@@ -1,12 +1,20 @@
 ---
 title: "stsci4850_project"
-author: "Victoria Liu"
+author: "Victoria Liu,
+Maureen Kaminja,
+Albert Li,
+"
 date: "2025-04-23"
 output: html_document
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(tidyverse)
+library(broom)
+
 ```
 
 # Imported three datasets from MIT Study
@@ -17,17 +25,7 @@ grades_df <- read.csv("grades.csv")
 ```
 
 ```{r}
-library(dplyr)
-library(tidyr)
-library(stringr)
-library(readr)
-library(purrr)
-```
-
-```{r}
-
-g <- read_csv("grades.csv")
-
+# Clean grades_df
 block_ids <- paste0(rep(1:7, each = 2), c("A", "B"))
 stubs <- c("effort", "overall", "prolific_pid.")
 
@@ -35,15 +33,15 @@ result <- lapply(block_ids, function(bid) {
   paste0(stubs, bid)
 })
 
-# # Create cleaned mini-dataframes
+# # Create cleaned mini-dataframes of all graders to be unique
 dfs <- lapply(result, function(cols) {
-  g %>%
+  grades_df %>%
     select(all_of(c(cols, "grader_id"))) %>%
     rename_with(~ str_remove(., paste0("\\.", substr(cols[1], 7, 8))), all_of(cols)) %>%  # remove .1A, .1B, etc
-    relocate(prolific_pid, .before = everything())  # move prolific_pid to first
+    relocate(prolific_pid, .before = everything())  # move prolific_pid to first. makes easier to work with. 
 })
 
-# Optionally name the list
+# Optionally name the lists
 names(dfs) <- block_ids
 
 # 1. Combine/aggregate each mini-df
@@ -62,7 +60,7 @@ dfs_combined <- lapply(dfs, function(df) {
     )
 })
 
-# 2. Then join
+# 2. Then join the graders into one dataframe arranged per prolific_pid
 joined_df <- full_join(dfs_combined[[1]], dfs_combined[[2]], by = "prolific_pid")
 
 for (df in 3:length(dfs_combined)) {
@@ -85,7 +83,7 @@ dfs_renamed <- imap(dfs_combined, function(df, block_name) {
     rename_with(~ paste0(., "_", block_name), -prolific_pid)
 })
 
-# Step 2: Reduce (full join) all the renamed dataframes
+# Step 2: Reduce (full join) all the renamed data frames
 joined_df <- reduce(dfs_renamed, full_join, by = "prolific_pid")
 
 # First join joined_df and employment_df
@@ -94,8 +92,10 @@ joined_df <- full_join(joined_df, employment_df, by = "prolific_pid")
 # Then join the result with fullsurvey_df
 joined_df <- full_join(joined_df, fullsurvey_df, by = "prolific_pid")
 
+print(joined_df)
 ```
-# Changest to joined_df
+
+# Changes to joined_df
 ```{r}
 # Extracting relevant variables 
 block_cols <- c()
@@ -105,10 +105,8 @@ for (i in 1:7) {
 }
 
 cleaned_df <- joined_df[c("prolific_pid", "usedgpt", "used", "usefulness", "chatgpt_often", "empstat.x", block_cols)]
-# Change all nulls to 0s
-# cleaned_df <- cleaned_df %>%
-#   mutate(across(everything(), ~ ifelse(sapply(.x, is.null), 0, .x)))
 
+# Fixes relevant columns with NA
 cleaned_df <- cleaned_df %>%
   mutate(across(
     everything(),
@@ -121,16 +119,10 @@ cleaned_df <- cleaned_df %>%
     })
   ))
 
-# # # Average every cell in "used" column
-# cleaned_df <- cleaned_df %>%
-#   mutate(used = sapply(used, function(x) mean(x, na.rm = TRUE)))
-
 ```
 
 ```{r}
-library(dplyr)
-library(stringr)
-
+# Removing "," to find the mean of relevant response variables.
 cleaned_df <- cleaned_df %>%
   mutate(used = sapply(used, function(x) {
     # If x is a single value, just return it
@@ -145,6 +137,7 @@ cleaned_df <- cleaned_df %>%
 ```
 
 ```{r}
+# Creating dummy variables and finding means for text data.
 cleaned_df <- cleaned_df %>%
   mutate(across(
     all_of(block_cols),
@@ -170,12 +163,6 @@ cleaned_df <- cleaned_df %>%
   mutate(
     total_effort = rowSums(select(., starts_with("effort_")), na.rm = TRUE),
     total_overall = rowSums(select(., starts_with("overall_")), na.rm = TRUE)
-  )
-
-cleaned_df <- cleaned_df %>%
-  mutate(
-    total_effort = rowSums(select(., starts_with("effort_")), na.rm = TRUE),
-    total_overall = rowSums(select(., starts_with("overall_")), na.rm = TRUE)
   ) %>%
   select(-starts_with("effort_"), -starts_with("overall_"))
 ```
@@ -192,10 +179,29 @@ plot(cleaned_df)
 ```{r}
 model <- lm(total_overall ~ usedgpt + used + usefulness + chatgpt_often + empstat.x + total_effort, data = cleaned_df)
 summary(model)
+
 ```
 
 ```{r}
 model2 <- lm(total_overall ~ usedgpt + used + usefulness + chatgpt_often + empstat.x, data = cleaned_df)
 summary(model2)
+
+tidy(model) %>%
+  ggplot(aes(x = estimate, y = reorder(term, estimate))) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = estimate - 2*std.error, xmax = estimate + 2*std.error), height = 0.2) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray") +
+  theme_minimal() +
+  labs(x = "Coefficient Estimate", y = "Variable", title = "Regression Coefficients Plot")
+
+tidy(model2) %>%
+  ggplot(aes(x = estimate, y = reorder(term, estimate))) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = estimate - 2*std.error, xmax = estimate + 2*std.error), height = 0.2) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray") +
+  theme_minimal() +
+  labs(x = "Coefficient Estimate", y = "Variable", title = "Regression Coefficients Plot")
+
+
 ```
 
