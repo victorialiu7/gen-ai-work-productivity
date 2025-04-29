@@ -2,7 +2,9 @@
 title: "stsci4850_project"
 author: "Victoria Liu,
 Maureen Kaminja,
-Albert Li,
+Albert Li, 
+Sourabh Velaga, 
+Enrique Bermudez
 "
 date: "2025-04-23"
 output: html_document
